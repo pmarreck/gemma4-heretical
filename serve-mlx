@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# serve-mlx — Start the gemma4-heretical MLX server
+# Designed to be called by launchd or manually.
+# Uses nix develop to ensure all dependencies are available.
+
+set -u
+
+PROJECT_DIR="/Users/pmarreck/Documents-CloudManaged/gemma4-heretical"
+MODEL_DIR="${PROJECT_DIR}/gemma4-heretical-mlx-8bit"
+VENV_DIR="${PROJECT_DIR}/.venv"
+PORT="${MLX_SERVER_PORT:-8080}"
+
+cd "${PROJECT_DIR}" || exit 1
+
+# Auto-update pip packages on each start (idempotent, fast if already current)
+if [ "${MLX_SERVER_AUTOUPDATE:-1}" = "1" ]; then
+	echo "[serve-mlx] Checking for mlx-vlm updates..." >&2
+	nix develop -c bash -c "source '${VENV_DIR}/bin/activate' && pip install -q -U mlx-vlm 2>&1" | grep -v 'already satisfied' >&2 || true
+fi
+
+echo "[serve-mlx] Starting mlx_vlm.server on port ${PORT}..." >&2
+echo "[serve-mlx] Model: ${MODEL_DIR}" >&2
+
+exec nix develop -c bash -c "source '${VENV_DIR}/bin/activate' && exec mlx_vlm.server --model '${MODEL_DIR}' --port ${PORT}"
