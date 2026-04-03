@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Convert heretic-abliterated safetensors model to GGUF and import into Ollama
+# Requires: nix develop shell, llama.cpp repo (auto-cloned if missing)
+
+set -u
+
+HERETIC_MODEL_DIR="${1:-./gemma-4-31B-it-heretic}"
+LLAMA_CPP_DIR="./llama.cpp"
+QUANTIZATION="${2:-q4_k_m}"
+OLLAMA_NAME="gemma4-heretical"
+
+if [ ! -d "$HERETIC_MODEL_DIR" ]; then
+	echo "ERROR: Abliterated model not found at $HERETIC_MODEL_DIR" >&2
+	echo "Run ./abliterate first and save the model to that directory." >&2
+	echo "" >&2
+	echo "Usage: ./convert-to-ollama [model-dir] [quantization]" >&2
+	echo "  model-dir:    path to heretic output (default: ./gemma-4-31B-it-heretic)" >&2
+	echo "  quantization: GGUF quant type (default: q4_k_m)" >&2
+	exit 1
+fi
+
+echo "=== Convert to Ollama ==="
+echo ""
+echo "Source:       $HERETIC_MODEL_DIR"
+echo "Quantization: $QUANTIZATION"
+echo "Ollama name:  $OLLAMA_NAME"
+echo ""
+
+# Step 1: Get llama.cpp converter
+if [ ! -d "$LLAMA_CPP_DIR" ]; then
+	echo "Cloning llama.cpp for GGUF conversion..."
+	git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_CPP_DIR"
+fi
+
+# Step 2: Install converter dependencies
+echo "Installing converter dependencies..."
+pip install -q -r "$LLAMA_CPP_DIR/requirements/requirements-convert_hf_to_gguf.txt" 2>&1 | tail -3
+
+# Step 3: Ensure tokenizer.model exists (heretic sometimes doesn't save it)
+if [ ! -f "$HERETIC_MODEL_DIR/tokenizer.model" ]; then
+	echo "WARNING: tokenizer.model not found in heretic output."
+	echo "Attempting to copy from HuggingFace cache..."
+	CACHE_DIR="$HOME/.cache/huggingface/hub/models--google--gemma-4-31B-it"
+	if [ -d "$CACHE_DIR" ]; then
+		TOKENIZER=$(find "$CACHE_DIR" -name "tokenizer.model" -type f 2>/dev/null | head -1)
+		if [ -n "$TOKENIZER" ]; then
+			cp "$TOKENIZER" "$HERETIC_MODEL_DIR/tokenizer.model"
+			echo "Copied tokenizer.model from cache."
+		fi
+	fi
+	if [ ! -f "$HERETIC_MODEL_DIR/tokenizer.model" ]; then
+		echo "ERROR: Could not find tokenizer.model. You may need to download it manually from" >&2
+		echo "  https://huggingface.co/google/gemma-4-31B-it" >&2
+		exit 1
+	fi
+fi
+
+# Step 4: Convert to GGUF
+GGUF_FILE="$HERETIC_MODEL_DIR/gemma-4-31B-it-heretic-${QUANTIZATION^^}.gguf"
+echo ""
+echo "Converting to GGUF ($QUANTIZATION)..."
+python "$LLAMA_CPP_DIR/convert_hf_to_gguf.py" "$HERETIC_MODEL_DIR" --outtype "$QUANTIZATION"
+
+# Find the output file (converter names it based on model config)
+GGUF_ACTUAL=$(find "$HERETIC_MODEL_DIR" -name "*.gguf" -type f 2>/dev/null | head -1)
+if [ -z "$GGUF_ACTUAL" ]; then
+	echo "ERROR: GGUF conversion failed — no .gguf file found." >&2
+	exit 1
+fi
+
+echo "GGUF file: $GGUF_ACTUAL"
+
+# Step 5: Create Ollama Modelfile
+MODELFILE="$HERETIC_MODEL_DIR/Modelfile"
+cat > "$MODELFILE" <<'MODELEOF'
+FROM {{GGUF_PATH}}
+
+TEMPLATE """<start_of_turn>user
+{{ .Prompt }}<end_of_turn>
+<start_of_turn>model
+"""
+
+PARAMETER stop <end_of_turn>
+PARAMETER num_ctx 8192
+MODELEOF
+
+# Replace placeholder with actual path
+sed -i '' "s|{{GGUF_PATH}}|$(cd "$(dirname "$GGUF_ACTUAL")" && pwd)/$(basename "$GGUF_ACTUAL")|" "$MODELFILE"
+
+echo ""
+echo "Modelfile: $MODELFILE"
+echo ""
+
+# Step 6: Import into Ollama
+echo "Importing into Ollama as '$OLLAMA_NAME'..."
+ollama create "$OLLAMA_NAME" -f "$MODELFILE"
+
+echo ""
+echo "=== Done! ==="
+echo ""
+echo "Run with:"
+echo "  ollama run $OLLAMA_NAME"
+echo ""
+echo "Compare with base model:"
+echo "  ollama run gemma4:31b"

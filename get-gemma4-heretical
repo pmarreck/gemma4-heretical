@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#
+# get-gemma4-heretical — Create an uncensored Gemma 4 31B model in Ollama
+#
+# What this does:
+#   Downloads an "abliterated" (uncensored) Gemma 4 31B model and registers
+#   it in Ollama with the correct chat template so it actually works.
+#
+# Source model:
+#   trohrbaugh/gemma-4-31b-it-heretic-ara (HuggingFace)
+#   - Abliterated using p-e-w/heretic with Arbitrary-Rank Ablation (ARA)
+#   - Refusals: 5/100 (down from 98/100 on stock model)
+#   - KL divergence: 0.012 (virtually no quality loss)
+#   GGUF quantization by jfiekdjdk (imatrix-based, high quality)
+#
+# The problem this solves:
+#   Community GGUF uploads of Gemma 4 models ship with an incorrect chat
+#   template (using <|turn>/<turn|> delimiters instead of Gemma 4's native
+#   format). Ollama has built-in Gemma 4 support via RENDERER/PARSER, but
+#   the HuggingFace GGUFs don't set it — so the model just outputs "---"
+#   on repeat. This script pulls the GGUF, then re-registers it with the
+#   correct renderer/parser metadata.
+#
+# Requirements:
+#   - Ollama 0.20.0+ (https://ollama.com)
+#   - ~33 GB disk space (Q8_0 quantization)
+#   - ~33 GB RAM to run (or use Q4_K_M below for ~19 GB)
+#
+# Usage:
+#   chmod +x get-gemma4-heretical
+#   ./get-gemma4-heretical
+#   ollama run gemma4-heretical
+#
+# To use a smaller quantization (less RAM, slightly lower quality):
+#   ./get-gemma4-heretical Q4_K_M    # ~19 GB (good balance)
+#   ./get-gemma4-heretical Q6_K      # ~25 GB (higher quality)
+#   ./get-gemma4-heretical IQ4_NL    # ~17 GB (smallest, imatrix)
+
+set -u
+
+QUANT="${1:-Q8_0}"
+HF_REPO="hf.co/jfiekdjdk/gemma-4-31b-it-heretic-ara-gguf"
+MODEL_NAME="gemma4-heretical"
+
+echo "=== gemma4-heretical setup ==="
+echo ""
+echo "Quantization: ${QUANT}"
+echo "Source:       ${HF_REPO}"
+echo ""
+
+# Step 1: Pull the GGUF from HuggingFace
+echo "[1/3] Pulling GGUF from HuggingFace (this downloads ~17-33 GB)..."
+ollama pull "${HF_REPO}:${QUANT}"
+if [ $? -ne 0 ]; then
+	echo "ERROR: Failed to pull model. Check your internet connection and that" >&2
+	echo "       Ollama is enabled at https://huggingface.co/settings/local-apps" >&2
+	exit 1
+fi
+
+# Step 2: Extract the blob path and create a Modelfile with the correct template
+echo ""
+echo "[2/3] Creating Modelfile with correct Gemma 4 renderer..."
+BLOB_PATH=$(ollama show "${HF_REPO}:${QUANT}" --modelfile 2>/dev/null | grep '^FROM /' | head -1 | sed 's/^FROM //')
+if [ -z "$BLOB_PATH" ]; then
+	echo "ERROR: Could not determine blob path from ollama show" >&2
+	exit 1
+fi
+
+MODELFILE=$(mktemp)
+cat > "$MODELFILE" <<EOF
+# Gemma 4 31B abliterated (trohrbaugh/heretic-ara, ${QUANT})
+# The RENDERER and PARSER lines are the key fix — they tell Ollama to use
+# its built-in Gemma 4 chat formatting instead of the broken template
+# baked into the GGUF metadata.
+FROM ${BLOB_PATH}
+TEMPLATE {{ .Prompt }}
+RENDERER gemma4
+PARSER gemma4
+PARAMETER top_k 64
+PARAMETER top_p 0.95
+PARAMETER temperature 1
+EOF
+
+# Step 3: Register the model with the correct metadata
+echo "[3/3] Registering as '${MODEL_NAME}'..."
+ollama create "${MODEL_NAME}" -f "$MODELFILE"
+rm -f "$MODELFILE"
+
+echo ""
+echo "=== Done! ==="
+echo ""
+echo "Run with:"
+echo "  ollama run ${MODEL_NAME}"
+echo ""
+echo "Model details:"
+echo "  Base:        google/gemma-4-31B-it"
+echo "  Abliteration: trohrbaugh/heretic-ara (ARA method)"
+echo "  Refusals:    5/100 (vs 98/100 stock)"
+echo "  KL div:      0.012 (near-zero quality loss)"
+echo "  Quant:       ${QUANT} (imatrix by jfiekdjdk)"

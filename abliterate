@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Abliterate Gemma 4 31B using heretic
+# Requires: nix develop shell (provides Python 3.12 + heretic-llm)
+
+set -u
+
+MODEL="google/gemma-4-31B-it"
+
+# Verify we're in the nix devShell with heretic available
+if ! python -c "import heretic" 2>/dev/null; then
+	echo "ERROR: heretic not found. Run this from inside the nix devShell:" >&2
+	echo "  nix develop" >&2
+	echo "  ./abliterate" >&2
+	exit 1
+fi
+
+echo "=== Gemma 4 31B Abliteration ==="
+echo ""
+echo "Model:       $MODEL"
+echo "Memory:      128 GB unified (bf16, no quantization needed)"
+echo ""
+echo "This will:"
+echo "  1. Download ~62 GB of model weights from HuggingFace (first run only)"
+echo "  2. Run ~200 optimization trials (may take several hours on MPS)"
+echo "  3. Present an interactive menu to save the result"
+echo ""
+echo "NOTE: Applying Gemma4ClippableLinear -> nn.Linear monkey-patch"
+echo "      (PEFT 0.18.x doesn't recognize Gemma 4's custom linear wrapper)"
+echo ""
+
+# Build remaining args (pass through everything after script name)
+EXTRA_ARGS=("$@")
+
+# Run heretic via Python so we can monkey-patch before model loading.
+# The patch replaces Gemma4ClippableLinear (nn.Module subclass) with a version
+# that inherits from nn.Linear, which PEFT's LoRA injection requires.
+# See: https://github.com/huggingface/peft/issues/3129
+#      https://github.com/p-e-w/heretic/issues/265
+exec python -c "
+import sys
+import torch
+import torch.nn as nn
+
+# --- Monkey-patch Gemma4ClippableLinear to inherit from nn.Linear ---
+# PEFT's LoRA dispatcher rejects any module that isn't a recognized type
+# (nn.Linear, nn.Embedding, Conv*, etc.). Gemma 4's ClippableLinear wraps
+# nn.Linear but inherits from nn.Module, so PEFT throws ValueError.
+# This patch makes it an nn.Linear subclass while preserving the clamping behavior.
+from transformers.models.gemma4 import modeling_gemma4
+
+class PatchedClippableLinear(nn.Linear):
+    def __init__(self, config, in_features, out_features):
+        nn.Linear.__init__(self, in_features, out_features, bias=False)
+        self.use_clipped_linears = getattr(config, 'use_clipped_linears', False)
+        if self.use_clipped_linears:
+            self.register_buffer('input_min', torch.tensor(-float('inf')))
+            self.register_buffer('input_max', torch.tensor(float('inf')))
+            self.register_buffer('output_min', torch.tensor(-float('inf')))
+            self.register_buffer('output_max', torch.tensor(float('inf')))
+
+    def forward(self, x):
+        if self.use_clipped_linears:
+            x = torch.clamp(x, self.input_min, self.input_max)
+        out = nn.Linear.forward(self, x)
+        if self.use_clipped_linears:
+            out = torch.clamp(out, self.output_min, self.output_max)
+        return out
+
+modeling_gemma4.Gemma4ClippableLinear = PatchedClippableLinear
+# --- End monkey-patch ---
+
+# Now run heretic with the patched module in place
+sys.argv = ['heretic', '--model', '${MODEL}', '--print-responses'] + sys.argv[1:]
+from heretic.main import main
+sys.exit(main())
+" "${EXTRA_ARGS[@]}"

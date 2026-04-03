@@ -1,0 +1,38 @@
+# Python venv (managed by nix devShell)
+.venv/
+
+# Heretic output (large model files)
+gemma-4-31B-it-heretic/
+
+# MLX converted model (large)
+gemma4-heretical-mlx-8bit/
+
+# Heretic source clone
+heretic-src/
+
+# llama.cpp clone (for GGUF conversion)
+llama.cpp/
+
+# Heretic checkpoints
+checkpoints/
+
+# Runtime logs
+*.log
+
+# Local Modelfile (contains machine-specific blob paths)
+Modelfile
+
+# Nix
+result
+result-*
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Editor
+CLAUDE.md
+AGENTS.md
