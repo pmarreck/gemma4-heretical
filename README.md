@@ -11,7 +11,7 @@ Uses the best available community abliteration: [trohrbaugh/gemma-4-31b-it-heret
 
 ## Quick start (Ollama)
 
-Requires [Ollama](https://ollama.com) 0.20.0+ and ~33 GB disk/RAM (Q8_0).
+Requires [Ollama](https://ollama.com) 0.20.2+ and ~33 GB disk/RAM (Q8_0).
 
 ```bash
 git clone https://github.com/pmarreck/gemma4-heretical
@@ -56,6 +56,8 @@ mlx_vlm.server --model ./gemma4-heretical-mlx-8bit --port 8080
 ```
 
 See [OPENCLAW_SETUP.md](OPENCLAW_SETUP.md) for connecting this to OpenClaw or any OpenAI-compatible client.
+
+> **Note:** Some users report that MLX-converted models can feel slightly less capable than their GGUF equivalents, especially at lower quantizations. This is likely due to differences in quantization methods — GGUF benefits from imatrix-calibrated quantization that better preserves critical weights, whereas MLX quantization historically lacked this. At 8-bit the gap should be minimal, but YMMV. See also [omlx](https://github.com/jundot/omlx), a tool that may help streamline MLX LLM inference on Macs.
 
 ## DIY abliteration
 

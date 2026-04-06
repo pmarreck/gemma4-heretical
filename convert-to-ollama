@@ -4,6 +4,26 @@
 
 set -u
 
+# Check Ollama version (minimum 0.20.2)
+MIN_OLLAMA_VERSION="0.20.2"
+if ! command -v ollama &>/dev/null; then
+	echo "ERROR: ollama not found. Install it from https://ollama.com" >&2
+	exit 1
+fi
+OLLAMA_VERSION=$(ollama --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+if [ -z "$OLLAMA_VERSION" ]; then
+	echo "ERROR: Could not determine Ollama version." >&2
+	exit 1
+fi
+version_ge() {
+	printf '%s\n%s\n' "$2" "$1" | sort -V | head -1 | grep -qx "$2"
+}
+if ! version_ge "$OLLAMA_VERSION" "$MIN_OLLAMA_VERSION"; then
+	echo "ERROR: Ollama ${MIN_OLLAMA_VERSION}+ is required (found ${OLLAMA_VERSION})." >&2
+	echo "       Update Ollama: https://ollama.com" >&2
+	exit 1
+fi
+
 HERETIC_MODEL_DIR="${1:-./gemma-4-31B-it-heretic}"
 LLAMA_CPP_DIR="./llama.cpp"
 QUANTIZATION="${2:-q4_k_m}"
